@@ -7,10 +7,24 @@ from os.path import realpath
 from sys import argv, exit
 from threading import Lock
 
+from os.path import basename, dirname 
+
 import os
 
 from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
 
+filehandledict = dict()
+
+class Filehandle:
+	def __init__( self, fh ):
+		self.fh = fh
+
+	def is_in_cache( self ):
+		return False
+	
+	def read( self, offset, size ):
+		os.lseek( self.fh, offset, 0 )
+		return os.read( self.fh, size )
 
 class Loopback(LoggingMixIn, Operations):
     def __init__(self, root):
@@ -28,7 +42,7 @@ class Loopback(LoggingMixIn, Operations):
     chown = os.chown
 
     def create(self, path, mode):
-        return os.open(path, os.O_WRONLY | os.O_CREAT, mode)
+        raise FuseOSError(ENOTSUP)
 
     def flush(self, path, fh):
         return os.fsync(fh)
@@ -44,17 +58,25 @@ class Loopback(LoggingMixIn, Operations):
     getxattr = None
 
     def link(self, target, source):
-        return os.link(source, target)
+        return os.open(path, os.O_WRONLY | os.O_CREAT, mode)
 
     listxattr = None
     mkdir = os.mkdir
     mknod = os.mknod
-    open = os.open
+
+    def open(self, path, flags):
+        fh = os.open( path, flags )
+        filehandledict[fh] = Filehandle( fh )
+        return fh
 
     def read(self, path, size, offset, fh):
         with self.rwlock:
-            os.lseek(fh, offset, 0)
-            return os.read(fh, size)
+            if fh in filehandledict:
+                fho = filehandledict[fh]
+                return fho.read( offset, size )
+            else:
+                print( "No filehandle found" )
+                raise FuseOSError(EACCES)
 
     def readdir(self, path, fh):
         return ['.', '..'] + os.listdir(path)
@@ -62,6 +84,7 @@ class Loopback(LoggingMixIn, Operations):
     readlink = os.readlink
 
     def release(self, path, fh):
+        del filehandledict[fh]
         return os.close(fh)
 
     def rename(self, old, new):
