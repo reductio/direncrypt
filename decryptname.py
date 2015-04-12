@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-from encryptdir import derive_new_key, decrypt_name
+from cryptfuncs import derive_new_key, decrypt_name
 import sys
 import os
 
