@@ -83,7 +83,7 @@ class Loopback(LoggingMixIn, Operations):
                 raise FuseOSError(EACCES)
 
     def readdir(self, path, fh):
-        return ['.', '..'] + os.listdir(path)
+        return ['.', '..'] + [ encrypt_name( x, key ) for x in os.listdir(path) if isfile( x ) or isdir( x ) ]
 
     readlink = os.readlink
 
