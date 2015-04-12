@@ -7,13 +7,17 @@ from os.path import realpath
 from sys import argv, exit
 from threading import Lock
 
-from os.path import basename, dirname 
+from os.path import basename, dirname, isfile, isdir
 
 import os
 
 from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
 
+from cryptfuncs import encrypt_name, decrypt_name, derive_new_key
+
 filehandledict = dict()
+keyfile = None
+key = None
 
 class Filehandle:
 	def __init__( self, fh ):
@@ -115,8 +119,13 @@ class Loopback(LoggingMixIn, Operations):
 
 
 if __name__ == '__main__':
-    if len(argv) != 3:
-        print('usage: %s <root> <mountpoint>' % argv[0])
+    if len(argv) != 4:
+        print('usage: %s <root> <mountpoint> <keyfile>' % argv[0])
         exit(1)
-
+    keyfile = argv[3]
+    if isfile( keyfile ):
+       key = derive_new_key( keyfile )
+    else:
+       print('Keyfile has to be a regular file') 
+       exit(1)
     fuse = FUSE(Loopback(argv[1]), argv[2], foreground=True)
