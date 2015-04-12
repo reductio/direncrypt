@@ -49,6 +49,7 @@ class Loopback(LoggingMixIn, Operations):
         return path
 
     def access(self, path, mode):
+	path = self.translate_path( path )
         if not os.access(path, mode):
             raise FuseOSError(EACCES)
 
@@ -117,6 +118,7 @@ class Loopback(LoggingMixIn, Operations):
                 raise FuseOSError(EACCES)
 
     def readdir(self, path, fh):
+        path = self.translate_path( path )
         return ['.', '..'] + [ encrypt_name( x, key ) for x in os.listdir(path) if isfile( path + "/" + x ) or isdir( path + "/" + x ) ]
 
     readlink = os.readlink
