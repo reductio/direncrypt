@@ -41,6 +41,11 @@ def encrypt_file( file, out, keyfile ):
 	proc.communicate()
 	return
 
+def decrypt_file( file, out, keyfile ):
+	proc = Popen( ["openssl", "aes-256-cbc", "-d", "-salt", "-kfile", keyfile, "-in", file, "-out", out] )
+	proc.communicate()
+	return
+
 def convert_directory( source, dest, key, keyfile ):
 	sourcename = os.path.basename( source )
 	encdest = encrypt_name( sourcename, key )
