@@ -13,15 +13,19 @@ import os
 
 from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
 
-from cryptfuncs import encrypt_name, decrypt_name, derive_new_key
+from cryptfuncs import encrypt_name, decrypt_name, derive_new_key, encrypt_file
+import random
 
 filehandledict = dict()
 keyfile = None
 key = None
+tempdir = None
+mountpoint = None
 
 class Filehandle:
-	def __init__( self, fh ):
+	def __init__( self, fh, tempfile ):
 		self.fh = fh
+		self.tempfile = tempfile
 
 	def is_in_cache( self ):
 		return False
@@ -77,15 +81,30 @@ class Loopback(LoggingMixIn, Operations):
     getxattr = None
 
     def link(self, target, source):
-        return os.open(path, os.O_WRONLY | os.O_CREAT, mode)
+        raise FuseOSError(ENOTSUP)
 
     listxattr = None
     mkdir = os.mkdir
     mknod = os.mknod
 
     def open(self, path, flags):
-        fh = os.open( path, flags )
-        filehandledict[fh] = Filehandle( fh )
+        size_new = self.getattr( path )['st_size']
+        translated = False
+        try:
+            path = self.translate_path( path )
+            translated = True
+        except:
+            raise FuseOSError(EACCESS)
+        while True:
+            tempfile = tempdir + str( random.randint( 0, 1000000 ) )
+            if not os.path.exists( tempfile ):
+                break
+        encrypt_file( path, tempfile, keyfile )
+        size_real = os.path.getsize( tempfile )
+        if size_new != size_real:
+                raise FuseOSError(EACCESS)
+        fh = os.open( tempfile, flags )
+        filehandledict[fh] = Filehandle( fh, tempfile )
         return fh
 
     def read(self, path, size, offset, fh):
@@ -103,11 +122,14 @@ class Loopback(LoggingMixIn, Operations):
     readlink = os.readlink
 
     def release(self, path, fh):
+        handle = filehandledict[fh]
         del filehandledict[fh]
-        return os.close(fh)
+        r = os.close(fh)
+        os.remove( handle.tempfile )
+        return r
 
     def rename(self, old, new):
-        return os.rename(old, self.root + new)
+        raise FuseOSError(ENOTSUP)
 
     rmdir = os.rmdir
 
@@ -118,29 +140,41 @@ class Loopback(LoggingMixIn, Operations):
             'f_frsize', 'f_namemax'))
 
     def symlink(self, target, source):
-        return os.symlink(source, target)
+        raise FuseOSError(ENOTSUP)
 
     def truncate(self, path, length, fh=None):
-        with open(path, 'r+') as f:
-            f.truncate(length)
+        raise FuseOSError(ENOTSUP)
 
     unlink = os.unlink
     utimens = os.utime
 
     def write(self, path, data, offset, fh):
-        with self.rwlock:
-            os.lseek(fh, offset, 0)
-            return os.write(fh, data)
+        raise FuseOSError(ENOTSUP)
 
+def create_temp_dir( prefix = "/tmp/" ):
+	prefix = prefix + "/fuseencrypt-"
+	while True:
+		prefix = prefix + str( random.randint( 0, 100000000000 ) )
+		if not os.path.exists( prefix ):
+			os.makedirs( prefix )
+			break
+	return prefix + "/"
 
 if __name__ == '__main__':
     if len(argv) != 4:
         print('usage: %s <root> <mountpoint> <keyfile>' % argv[0])
         exit(1)
     keyfile = argv[3]
+    tempdir = create_temp_dir()
+    mountpoint = realpath(argv[2])
+    print( "mountpoint", mountpoint )
+    print( "tempdir: %s" % tempdir )
     if isfile( keyfile ):
        key = derive_new_key( keyfile )
     else:
        print('Keyfile has to be a regular file') 
        exit(1)
+
     fuse = FUSE(Loopback(argv[1]), argv[2], foreground=True)
+
+    os.rmdir( tempdir )
