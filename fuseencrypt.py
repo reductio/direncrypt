@@ -38,6 +38,12 @@ class Loopback(LoggingMixIn, Operations):
     def __call__(self, op, path, *args):
         return super(Loopback, self).__call__(op, self.root + path, *args)
 
+    def translate_path( self, path ):
+        parts = filter( lambda x: x != "", path.split( "/" ) )
+        parts = map( lambda x: decrypt_name( x, key ) if x.startswith("U2FsdGVkX1") else x, parts )
+        path = "/" + "/".join( parts )
+        return path
+
     def access(self, path, mode):
         if not os.access(path, mode):
             raise FuseOSError(EACCES)
@@ -55,9 +61,18 @@ class Loopback(LoggingMixIn, Operations):
         return os.fsync(fh)
 
     def getattr(self, path, fh=None):
-        st = os.lstat(path)
-        return dict((key, getattr(st, key)) for key in ('st_atime', 'st_ctime',
+        translated = False
+        try:
+            path = self.translate_path( path )
+            translated = True
+        except:
+            pass
+        st = os.stat(path)
+        stat = dict((key, getattr(st, key)) for key in ('st_atime', 'st_ctime',
             'st_gid', 'st_mode', 'st_mtime', 'st_nlink', 'st_size', 'st_uid'))
+        if translated:
+              stat['st_size'] = ( stat['st_size'] // 16 + 2 ) * 16
+        return stat
 
     getxattr = None
 
@@ -83,7 +98,7 @@ class Loopback(LoggingMixIn, Operations):
                 raise FuseOSError(EACCES)
 
     def readdir(self, path, fh):
-        return ['.', '..'] + [ encrypt_name( x, key ) for x in os.listdir(path) if isfile( x ) or isdir( x ) ]
+        return ['.', '..'] + [ encrypt_name( x, key ) for x in os.listdir(path) if isfile( path + "/" + x ) or isdir( path + "/" + x ) ]
 
     readlink = os.readlink
 
