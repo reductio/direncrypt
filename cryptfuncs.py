@@ -7,6 +7,7 @@ import Crypto
 from Crypto.Hash.SHA256 import SHA256Hash
 from Crypto.Cipher import AES
 from Crypto.Util import Counter
+from Crypto import Random
 
 e64 = lambda x: b64encode( x, b"-_" )
 d64 = lambda x: b64decode( x, b"-_" )
@@ -54,13 +55,54 @@ def decrypt_name( name, key ):
 	return dname
 
 def encrypt_file( file, out, keyfile ):
-	proc = Popen( ["openssl", "aes-256-cbc", "-salt", "-kfile", keyfile, "-in", file, "-out", out] )
-	proc.communicate()
+	if os.path.exists( out ):
+		print( "file exists!" )
+		return
+
+	if not os.path.exists( file ):
+		print( "input file does not exist!" )
+		return
+
+	salt = Random.new().read( 16 )
+	iv = Random.new().read( 8 )
+	key = sha256( derive_new_key( keyfile ) + salt )
+	aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv ) )
+
+	with open( out, "wb" ) as outfile:
+		outfile.write( salt )
+		outfile.write( iv )
+
+		with open( file, "rb" ) as infile:
+			while True:
+				data = infile.read( 1 * 1024 * 1024 )
+				if len( data ) == 0:
+					break
+				data = aes.encrypt( data )
+				outfile.write( data )
 	return
 
 def decrypt_file( file, out, keyfile ):
-	proc = Popen( ["openssl", "aes-256-cbc", "-d", "-salt", "-kfile", keyfile, "-in", file, "-out", out] )
-	proc.communicate()
+	if os.path.exists( out ):
+		print( "file exists!" )
+		return
+
+	if not os.path.exists( file ):
+		print( "input file does not exist!" )
+		return
+
+	with open( file, "rb" ) as infile:
+		salt = infile.read( 16 )
+		iv = infile.read( 8 )
+		key = sha256( derive_new_key( keyfile ) + salt )
+		aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv ) )
+
+		with open( out, "wb" ) as outfile:
+			while True:
+				data = infile.read( 1 * 1024 * 1024 )
+				if len( data ) == 0:
+					break
+				data = aes.decrypt( data )
+				outfile.write( data )
 	return
 
 def convert_directory( source, dest, key, keyfile ):
