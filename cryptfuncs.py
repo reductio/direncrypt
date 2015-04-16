@@ -8,6 +8,7 @@ from Crypto.Hash.SHA256 import SHA256Hash
 from Crypto.Cipher import AES
 from Crypto.Util import Counter
 from Crypto import Random
+from Crypto.Random import random
 
 e64 = lambda x: b64encode( x, b"-_" )
 d64 = lambda x: b64decode( x, b"-_" )
@@ -71,6 +72,7 @@ def encrypt_file( file, out, keyfile ):
 	with open( out, "wb" ) as outfile:
 		outfile.write( salt )
 		outfile.write( iv )
+		outfile.write( b'________' )
 
 		with open( file, "rb" ) as infile:
 			while True:
@@ -93,6 +95,7 @@ def decrypt_file( file, out, keyfile ):
 	with open( file, "rb" ) as infile:
 		salt = infile.read( 16 )
 		iv = infile.read( 8 )
+		check = infile.read( 8 )
 		key = sha256( derive_new_key( keyfile ) + salt )
 		aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv ) )
 
@@ -104,6 +107,19 @@ def decrypt_file( file, out, keyfile ):
 				data = aes.decrypt( data )
 				outfile.write( data )
 	return
+
+def __ed_in_stream( data, data_offset, key, iv, encrypt ):
+	block_offset, mod = divmod( data_offset, 16 )
+	aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv, init = 1 + block_offset ) )
+	func = aes.encrypt if encrypt else aes.decrypt
+	func( b' ' * mod ) #skip the bytes for this block
+	return func( data )
+
+def encrypt_in_stream( data, data_offset, key, iv ):
+	return __ed_in_stream( data, data_offset, key, iv, True )
+
+def decrypt_in_stream( data, data_offset, key, iv ):
+	return __ed_in_stream( data, data_offset, key, iv, False )
 
 def convert_directory( source, dest, key, keyfile ):
 	sourcename = os.path.basename( source )
@@ -135,3 +151,30 @@ def derive_new_key( keyfile ):
 	with open( keyfile, "rb" ) as k:
 		keydata = k.read( 10240 )
 	return keydata
+
+
+def __test_encrypt_in_stream():
+	rand = Random.new()
+	key = rand.read( 32 )
+	iv = b'12345678'
+	aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv ) )
+	data = rand.read( 5 * 1024 * 1024 )
+	encdata = aes.encrypt( data )
+
+	for i in range( 100 ):
+		start = random.randint( 0, len( data ) - 1 )
+		length = 1000
+		data_block = data[start:start+length]
+		comp_block = encdata[start:start+length]
+		test_block = encrypt_in_stream( data_block, start, key, iv )
+		if not comp_block == test_block:
+			return False
+	return True
+
+def __test():
+	print( "Testing encrypt_in_stream ... ", end = "" )
+	print( "PASSED" if __test_encrypt_in_stream() else "FAILED" )
+	pass
+
+if __name__ == "__main__":
+	__test()
