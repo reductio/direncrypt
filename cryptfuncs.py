@@ -3,48 +3,123 @@ import sys
 from subprocess import Popen, PIPE
 from base64 import b64encode, b64decode
 
-e64 = lambda x: b64encode( x.encode( "utf-8" ), b"-_" )
-d64 = lambda x: b64decode( x.encode( "utf-8" ), b"-_" )
+import Crypto
+from Crypto.Hash.SHA256 import SHA256Hash
+from Crypto.Cipher import AES
+from Crypto.Util import Counter
+from Crypto import Random
+from Crypto.Random import random
+
+e64 = lambda x: b64encode( x, b"-_" )
+d64 = lambda x: b64decode( x, b"-_" )
+
+def sha256( byte_array ):
+	sha = SHA256Hash( data = byte_array )
+	return sha.digest()
 
 def hash_name( name ):
-	proc = Popen( ["openssl", "dgst", "-sha256", "-r"], stdin = PIPE, stdout = PIPE )
-	stdout, stderr = proc.communicate( name.encode( "utf-8" ) )
-	sha = stdout.decode( "utf-8" )
-	sha = sha.split( ' ' )[0]
+	sha = sha256( name.encode( "utf-8" ) )
 	return sha
+
+def create_counter_function( iv, init = 1 ):
+	bits = 128 - ( len( iv ) << 3 )
+	return Counter.new( bits, prefix = iv, initial_value = init, allow_wraparound = True )
 
 def encrypt_name( name, key ):
 	namehash = hash_name( name )
-	salt = namehash[:16]
-	iv = namehash[-32:]
+	iv = namehash[:8]
+	salt = namehash[8:16]
+	key = sha256( key + salt )
+
+	aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv ) )
+	encname = aes.encrypt( name )
+
 	saltiv = salt + iv
 	saltivb64 = e64( saltiv ).decode( "utf-8" )
-	proc = Popen( ["openssl", "aes-256-cbc", "-a", "-salt", "-S", salt, "-iv", iv, "-k", key], stdin = PIPE, stdout = PIPE )
-	stdout, stderr = proc.communicate( input = name.encode( "utf-8" ) )
-	stdout = stdout.decode( "utf-8" ).replace( "+", "-" ).replace( "/", "_" )
-	nname = stdout[:-1] + "." + saltivb64
-	return nname
+	encnameb64 = e64( encname ).decode( "utf-8" )
+
+	return encnameb64 + '.' + saltivb64
 
 def decrypt_name( name, key ):
-	name, saltivb64 = name.split( '.' )
-	name = name.replace( "-", "+" ).replace( "_", "/" ) + "\n"
-	saltiv = d64( saltivb64 )
-	salt = saltiv[:16]
-	iv = saltiv[-32:]
-	proc = Popen( ["openssl", "aes-256-cbc", "-a", "-d", "-k", key, "-S", salt, "-iv", iv], stdin = PIPE, stdout = PIPE )
-	stdout, stderr = proc.communicate( input = name.encode( "utf-8" ) )
-	dname = stdout.decode( "utf-8")
+	encname64, saltivb64 = name.split( '.' )
+
+	saltiv = d64( saltivb64.encode( "utf-8" ) )
+	encname = d64( encname64.encode( "utf-8" ) )
+
+	salt = saltiv[:8]
+	iv = saltiv[8:16]
+	key = sha256( key + salt )
+
+	aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv ) )
+	dname = aes.decrypt( encname ).decode( "utf-8" )
+
 	return dname
 
 def encrypt_file( file, out, keyfile ):
-	proc = Popen( ["openssl", "aes-256-cbc", "-salt", "-kfile", keyfile, "-in", file, "-out", out] )
-	proc.communicate()
+	if os.path.exists( out ):
+		print( "file exists!" )
+		return
+
+	if not os.path.exists( file ):
+		print( "input file does not exist!" )
+		return
+
+	salt = Random.new().read( 16 )
+	iv = Random.new().read( 8 )
+	key = sha256( derive_new_key( keyfile ) + salt )
+	aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv ) )
+
+	with open( out, "wb" ) as outfile:
+		outfile.write( salt )
+		outfile.write( iv )
+		outfile.write( b'________' )
+
+		with open( file, "rb" ) as infile:
+			while True:
+				data = infile.read( 1 * 1024 * 1024 )
+				if len( data ) == 0:
+					break
+				data = aes.encrypt( data )
+				outfile.write( data )
 	return
 
 def decrypt_file( file, out, keyfile ):
-	proc = Popen( ["openssl", "aes-256-cbc", "-d", "-salt", "-kfile", keyfile, "-in", file, "-out", out] )
-	proc.communicate()
+	if os.path.exists( out ):
+		print( "file exists!" )
+		return
+
+	if not os.path.exists( file ):
+		print( "input file does not exist!" )
+		return
+
+	with open( file, "rb" ) as infile:
+		salt = infile.read( 16 )
+		iv = infile.read( 8 )
+		check = infile.read( 8 )
+		key = sha256( derive_new_key( keyfile ) + salt )
+		aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv ) )
+
+		with open( out, "wb" ) as outfile:
+			while True:
+				data = infile.read( 1 * 1024 * 1024 )
+				if len( data ) == 0:
+					break
+				data = aes.decrypt( data )
+				outfile.write( data )
 	return
+
+def __ed_in_stream( data, data_offset, key, iv, encrypt ):
+	block_offset, mod = divmod( data_offset, 16 )
+	aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv, init = 1 + block_offset ) )
+	func = aes.encrypt if encrypt else aes.decrypt
+	func( b' ' * mod ) #skip the bytes for this block
+	return func( data )
+
+def encrypt_in_stream( data, data_offset, key, iv ):
+	return __ed_in_stream( data, data_offset, key, iv, True )
+
+def decrypt_in_stream( data, data_offset, key, iv ):
+	return __ed_in_stream( data, data_offset, key, iv, False )
 
 def convert_directory( source, dest, key, keyfile ):
 	sourcename = os.path.basename( source )
@@ -73,8 +148,33 @@ def convert_directory( source, dest, key, keyfile ):
 	print( "%s -> %s" % ( sourcename, encdest ) )
 
 def derive_new_key( keyfile ):
-	proc = Popen( ["openssl", "dgst", "-sha256", "-r", keyfile], stdout = PIPE )
-	stdout, _ = proc.communicate()
-	sha = stdout.decode( "utf-8" )
-	sha = sha.split( ' ' )[0]
-	return sha
+	with open( keyfile, "rb" ) as k:
+		keydata = k.read( 10240 )
+	return keydata
+
+
+def __test_encrypt_in_stream():
+	rand = Random.new()
+	key = rand.read( 32 )
+	iv = b'12345678'
+	aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv ) )
+	data = rand.read( 5 * 1024 * 1024 )
+	encdata = aes.encrypt( data )
+
+	for i in range( 100 ):
+		start = random.randint( 0, len( data ) - 1 )
+		length = 1000
+		data_block = data[start:start+length]
+		comp_block = encdata[start:start+length]
+		test_block = encrypt_in_stream( data_block, start, key, iv )
+		if not comp_block == test_block:
+			return False
+	return True
+
+def __test():
+	print( "Testing encrypt_in_stream ... ", end = "" )
+	print( "PASSED" if __test_encrypt_in_stream() else "FAILED" )
+	pass
+
+if __name__ == "__main__":
+	__test()
