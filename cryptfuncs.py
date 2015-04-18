@@ -55,6 +55,10 @@ def decrypt_name( name, key ):
 
 	return dname
 
+def create_random_salt_iv():
+	rnd = Random.new()
+	return rnd.read( 16 ), rnd.read( 8 )
+
 def encrypt_file( file, out, keyfile ):
 	if os.path.exists( out ):
 		print( "file exists!" )
@@ -64,8 +68,7 @@ def encrypt_file( file, out, keyfile ):
 		print( "input file does not exist!" )
 		return
 
-	salt = Random.new().read( 16 )
-	iv = Random.new().read( 8 )
+	salt, iv = create_random_salt_iv()
 	key = sha256( derive_new_key( keyfile ) + salt )
 	aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv ) )
 
@@ -112,7 +115,8 @@ def __ed_in_stream( data, data_offset, key, iv, encrypt ):
 	block_offset, mod = divmod( data_offset, 16 )
 	aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv, init = 1 + block_offset ) )
 	func = aes.encrypt if encrypt else aes.decrypt
-	func( b' ' * mod ) #skip the bytes for this block
+	if mod:
+		func( b' ' * mod ) #skip the bytes for this block
 	return func( data )
 
 def encrypt_in_stream( data, data_offset, key, iv ):
@@ -158,10 +162,10 @@ def __test_encrypt_in_stream():
 	key = rand.read( 32 )
 	iv = b'12345678'
 	aes = AES.new( key, AES.MODE_CTR, counter = create_counter_function( iv ) )
-	data = rand.read( 5 * 1024 * 1024 )
+	data = rand.read( 100 * 1024 * 1024 )
 	encdata = aes.encrypt( data )
 
-	for i in range( 100 ):
+	for i in range( 1000 ):
 		start = random.randint( 0, len( data ) - 1 )
 		length = 1000
 		data_block = data[start:start+length]

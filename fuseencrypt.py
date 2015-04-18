@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 from __future__ import with_statement
 
@@ -13,7 +13,7 @@ import os
 
 from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
 
-from cryptfuncs import encrypt_name, decrypt_name, derive_new_key, encrypt_file
+from cryptfuncs import encrypt_name, decrypt_name, derive_new_key, encrypt_file, create_random_salt_iv, encrypt_in_stream, sha256
 import random
 
 filehandledict = dict()
@@ -21,18 +21,40 @@ keyfile = None
 key = None
 tempdir = None
 mountpoint = None
+filesaltivs = dict()
 
 class Filehandle:
-	def __init__( self, fh, tempfile ):
+	def __init__( self, fh, salt, iv ):
 		self.fh = fh
-		self.tempfile = tempfile
+		self.salt = salt
+		self.iv = iv
+		self.key = sha256( key + salt )
+		self.__firstblock = salt + iv + b"________"
+		print( self.__firstblock )
 
 	def is_in_cache( self ):
 		return False
 	
 	def read( self, offset, size ):
-		os.lseek( self.fh, offset, 0 )
-		return os.read( self.fh, size )
+		print( "read", offset, size )
+		part1_present = False
+		if offset < len( self.__firstblock ):
+			part1 = self.__firstblock[offset:offset+size]
+			size -= len( part1 )
+			if size <= 0:
+				return part1
+			offset = len( self.__firstblock )
+			part1_present = True
+		real_offset = offset - len( self.__firstblock )
+		self.fh.seek( real_offset, 0 )
+		data = self.fh.read( size )
+		data_enc = encrypt_in_stream( data, real_offset, self.key, self.iv )
+		if len( data ) != len( data_enc ):
+			print( "Strange!" )
+		if part1_present:
+			return part1 + data_enc
+		else:
+			return data_enc
 
 class Loopback(LoggingMixIn, Operations):
     def __init__(self, root):
@@ -43,13 +65,14 @@ class Loopback(LoggingMixIn, Operations):
         return super(Loopback, self).__call__(op, self.root + path, *args)
 
     def translate_path( self, path ):
+        path  = path[len( self.root ) + 1:]
         parts = filter( lambda x: x != "", path.split( "/" ) )
-        parts = map( lambda x: decrypt_name( x, key ) if x.startswith("U2FsdGVkX1") else x, parts )
-        path = "/" + "/".join( parts )
+        parts = map( lambda x: decrypt_name( x, key ), parts )
+        path = self.root + "/" + "/".join( parts )
         return path
 
     def access(self, path, mode):
-	path = self.translate_path( path )
+        path = self.translate_path( path )
         if not os.access(path, mode):
             raise FuseOSError(EACCES)
 
@@ -76,7 +99,8 @@ class Loopback(LoggingMixIn, Operations):
         stat = dict((key, getattr(st, key)) for key in ('st_atime', 'st_ctime',
             'st_gid', 'st_mode', 'st_mtime', 'st_nlink', 'st_size', 'st_uid'))
         if translated:
-              stat['st_size'] = ( stat['st_size'] // 16 + 2 ) * 16
+              stat['st_size'] = stat['st_size'] + 32
+        print( stat )
         return stat
 
     getxattr = None
@@ -89,24 +113,22 @@ class Loopback(LoggingMixIn, Operations):
     mknod = os.mknod
 
     def open(self, path, flags):
-        size_new = self.getattr( path )['st_size']
         translated = False
         try:
             path = self.translate_path( path )
             translated = True
         except:
             raise FuseOSError(EACCESS)
-        while True:
-            tempfile = tempdir + str( random.randint( 0, 1000000 ) )
-            if not os.path.exists( tempfile ):
-                break
-        encrypt_file( path, tempfile, keyfile )
-        size_real = os.path.getsize( tempfile )
-        if size_new != size_real:
-                raise FuseOSError(EACCESS)
-        fh = os.open( tempfile, flags )
-        filehandledict[fh] = Filehandle( fh, tempfile )
-        return fh
+
+        if path in filesaltivs:
+            salt, iv = filesaltivs[path]
+        else:
+            salt, iv = create_random_salt_iv()
+            filesaltivs[path] = ( salt, iv )
+
+        fh = open( path, "rb" )
+        filehandledict[fh.fileno()] = Filehandle( fh, salt, iv )
+        return fh.fileno()
 
     def read(self, path, size, offset, fh):
         with self.rwlock:
@@ -126,8 +148,7 @@ class Loopback(LoggingMixIn, Operations):
     def release(self, path, fh):
         handle = filehandledict[fh]
         del filehandledict[fh]
-        r = os.close(fh)
-        os.remove( handle.tempfile )
+        r = handle.fh.close()
         return r
 
     def rename(self, old, new):
