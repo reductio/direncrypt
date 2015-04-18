@@ -30,13 +30,11 @@ class Filehandle:
 		self.iv = iv
 		self.key = sha256( key + salt )
 		self.__firstblock = salt + iv + b"________"
-		print( self.__firstblock )
 
 	def is_in_cache( self ):
 		return False
 	
 	def read( self, offset, size ):
-		print( "read", offset, size )
 		part1_present = False
 		if offset < len( self.__firstblock ):
 			part1 = self.__firstblock[offset:offset+size]
@@ -100,7 +98,6 @@ class Loopback(LoggingMixIn, Operations):
             'st_gid', 'st_mode', 'st_mtime', 'st_nlink', 'st_size', 'st_uid'))
         if translated:
               stat['st_size'] = stat['st_size'] + 32
-        print( stat )
         return stat
 
     getxattr = None
