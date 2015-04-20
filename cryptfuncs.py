@@ -10,8 +10,8 @@ from Crypto.Util import Counter
 from Crypto import Random
 from Crypto.Random import random
 
-e64 = lambda x: b64encode( x, b"-_" )
-d64 = lambda x: b64decode( x, b"-_" )
+e64 = lambda x: b64encode( x, b"+_" )
+d64 = lambda x: b64decode( x, b"+_" )
 
 def sha256( byte_array ):
 	sha = SHA256Hash( data = byte_array )
@@ -43,8 +43,14 @@ def encrypt_name( name, key ):
 def decrypt_name( name, key ):
 	encname64, saltivb64 = name.split( '.' )
 
-	saltiv = d64( saltivb64.encode( "utf-8" ) )
-	encname = d64( encname64.encode( "utf-8" ) )
+	try:
+		saltiv = d64( saltivb64.encode( "utf-8" ) )
+		encname = d64( encname64.encode( "utf-8" ) )
+	except TypeError:
+		encname64 = encname64.replace( "-", "+" )
+		saltivb64 = sativb64.replace( "-", "+" )
+		saltiv = d64( saltivb64.encode( "utf-8" ) )
+		encname = d64( encname64.encode( "utf-8" ) )
 
 	salt = saltiv[:8]
 	iv = saltiv[8:16]
